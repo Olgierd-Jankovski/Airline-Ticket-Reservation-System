@@ -6,5 +6,7 @@ The project has several features, including the ability to search for flights ba
 TO use the system, users can run the main program and follow the prompts to search for available flights, book a flight, view booked flights, or canccel a booked flight. The system will provide feedback to the user at each step, including confirmation of booked or canceled flights.
 
 Overall, this project provides a basic flight booking system that can be expanded and customized as needed. It is designed to be easy to use and to provide a good starting point for building more complex flight booking systems.
+Inserted diagrams will provide you more information about the database scheme.
+You can find Postgres database creation prompts here:  (https://github.com/Olgierd199/Airline-Ticket-Reservation-System/blob/main/CreateDatabase.txt)
 ![RyanairDiagram_2 drawio](https://user-images.githubusercontent.com/93738688/229276227-233063e6-2721-4b34-8655-8cdc753aa9c3.png)
 ![Ryanair drawio](https://user-images.githubusercontent.com/93738688/229276254-26ae1ac6-4988-4e35-a8f1-8271b9508daf.png)
