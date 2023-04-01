@@ -1,0 +1,303 @@
+create database Airline_Reservation;
+
+create table Users
+(
+    Nr int not null primary key generated always as identity(start with 1 increment by 1),
+    AK int not null,
+    Name varchar(50) not null,
+    Surname varchar(50) not null,
+    Age int not null default 18,
+    constraint AK_Unique unique (AK)
+);
+
+create table Classes
+(
+    Nr int not null primary key generated always as identity(start with 1 increment by 1),
+    Class_Name varchar(50) not null
+);
+
+create table Functions
+(
+    Name varchar(50) not null,
+    Class_ID int not null,
+    constraint Class_ID_FK foreign key (Class_ID) references Classes(Nr) on delete restrict on update cascade
+);
+
+create table Aviacompanies
+(
+    Nr int not null primary key generated always as identity(start with 1 increment by 1),
+    Name varchar(50) not null
+);
+
+create table Flights
+(
+    Nr int not null primary key generated always as identity(start with 1 increment by 1),
+    Departure_Time timestamp not null,
+    Departure_Location varchar(50) not null check (Departure_Location != Arrival_Location),
+    Arrival_Location varchar(50) not null,
+    Seats_Left int not null,
+    Aviacompany_ID int not null,
+    constraint Aviacompany_ID_FK foreign key (Aviacompany_ID) references Aviacompanies(Nr) on delete cascade on update cascade
+);
+
+create table Tickets
+(
+    Nr int not null primary key generated always as identity(start with 1 increment by 1),
+    User_ID int not null,
+    Seat_Number int check (Seat_Number > 0 and Seat_Number < 101),
+    Flight_ID int not null,
+    Class_ID int not null default 1,
+    constraint User_ID_FK foreign key (User_ID) references Users(Nr) on delete cascade on update cascade,
+    constraint Flight_ID_FK foreign key (Flight_ID) references Flights(Nr) on delete restrict on update cascade,
+    constraint Class_ID_FK foreign key (Class_ID) references Classes(Nr)
+);
+
+create table Payments
+(
+    Ticket_ID int not null,
+    Cost int not null,
+    constraint Ticket_ID_FK foreign key (Ticket_ID) references Tickets(Nr) on delete cascade on update cascade
+);
+
+create materialized view Users_Information
+as
+select Users.Nr, Users.Age, count(Tickets.Nr) as Count_Flights
+from Users, Tickets
+where Users.Nr = Tickets.User_ID
+group by Users.Nr, Users.Age
+having count(Tickets.Nr) > 0 and Users.Name is not null;
+
+create view Flights_Information
+as
+select *
+from Flights
+where Departure_Time > current_timestamp and Seats_Left > 0;
+
+create view Classes_Information
+as
+select Classes.Class_Name, count(Functions.Name) as Count_Functions
+from Classes, Functions
+where Classes.Nr = Functions.Class_ID
+group by Classes.Class_Name;
+
+create view Aviacompanies_Information
+as
+select Aviacompanies.Name, count(Flights.Nr) as Count_Flights
+from Aviacompanies, Flights
+where Aviacompanies.Nr = Flights.Aviacompany_ID
+group by Aviacompanies.Name;
+
+create view Users_Flights
+as
+select Users.Name, Users.Surname, Flights.Departure_Time, Flights.Departure_Location, Flights.Arrival_Location
+from Users, Tickets, Flights
+where Users.Nr = Tickets.User_ID and Tickets.Flight_ID = Flights.Nr;
+
+create unique index AK on Users (Nr);
+create index Departure_Location on Flights (Departure_Location);
+
+create or replace function Time_Passed()
+returns trigger
+as $$
+begin
+    if (select Departure_Time from Flights where Nr = NEW.Flight_ID) < current_timestamp
+    then
+        raise exception 'Time has passed';
+    end if;
+    return NEW;
+end;
+$$ language plpgsql;
+create trigger Time_Passed
+before insert on Tickets
+for each row
+execute procedure Time_Passed();
+
+create or replace function Decrease_Seats()
+returns trigger
+as $$
+begin
+    if (select Seats_Left from Flights where Nr = NEW.Flight_ID) > 0
+    then
+        update Flights set Seats_Left = Seats_Left - 1 where Nr = NEW.Flight_ID;
+    else
+        raise exception 'There are no seats left';
+    end if;
+    return NEW;
+end;
+$$ language plpgsql;
+create trigger Decrease_Seats
+before insert on Tickets
+for each row
+execute procedure Decrease_Seats();
+
+create or replace function Update_Seats()
+returns trigger
+as $$
+begin
+    update Flights set Seats_Left = Seats_Left + 1 where Nr = OLD.Flight_ID;
+    return OLD;
+end;
+$$ language plpgsql;
+create trigger Update_Seats
+after delete on Tickets
+for each row
+execute procedure Update_Seats();
+
+create or replace function Discount()
+returns trigger
+as $$
+begin
+    if (select Age from Users where Nr = (select User_ID from Tickets where Nr = NEW.Ticket_ID)) < 18
+    then
+        NEW.Cost = NEW.Cost / 2;
+    end if;
+    return NEW;
+end;
+$$ language plpgsql;
+create trigger Discount
+before insert on Payments
+for each row
+execute procedure Discount();
+
+create or replace function Occupied_Seat()
+returns trigger
+as $$
+begin
+-- 1st count, has he already ordered a ticket for this flight
+-- 2nd, check, is the seat already occupied
+    if (select count(*) from Tickets where User_ID = NEW.User_ID and Flight_ID = NEW.Flight_ID) > 0
+    then
+        raise exception 'You have already ordered a ticket for this flight';
+    end if;
+    if (select count(*) from Tickets where Flight_ID = NEW.Flight_ID and Seat_Number = NEW.Seat_Number) > 0
+    then
+        raise exception 'This seat is already occupied';
+    end if;
+    return NEW;
+end;
+$$ language plpgsql;
+create trigger Occupied_Seat
+before insert on Tickets
+for each row
+execute procedure Occupied_Seat();
+
+--create a function LAST_INSERT_ID(), it should return the last inserted id in the table tickets
+-- because we are using a transaction, so once we insert a ticket, we need to get the id of that ticket
+-- and then insert it into the payments table
+create or replace function LAST_INSERT_ID()
+returns int
+as $$
+begin
+    return (select max(Nr) from Tickets);
+end;
+$$ language plpgsql;
+-- lets test that function;
+select LAST_INSERT_ID();
+
+
+insert into Aviacompanies (Name) values ('Air Baltic');
+insert into Aviacompanies (Name) values ('Ryanair');
+
+insert into Flights (Departure_Time, Departure_Location, Arrival_Location, Seats_Left, Aviacompany_ID) 
+values ('2020-12-12 12:00:00', 'Riga', 'London', 10, 1);
+insert into Flights (Departure_Time, Departure_Location, Arrival_Location, Seats_Left, Aviacompany_ID) 
+values ('2022-12-12 12:00:00', 'London', 'Vilnius', 2, 1);
+insert into Flights (Departure_Time, Departure_Location, Arrival_Location, Seats_Left, Aviacompany_ID)
+values ('2022-12-12 12:00:00', 'Riga', 'Vilnius', 5, 2);
+-- add a new flight with data 2023
+insert into Flights (Departure_Time, Departure_Location, Arrival_Location, Seats_Left, Aviacompany_ID)
+values ('2023-12-12 12:00:00', 'Riga', 'Warsaw', 5, 2);
+
+insert into Users (AK, Name, Surname, Age) values (123456, 'John', 'Smith', 20);
+insert into Users (AK, Name, Surname, Age) values (123457, 'Jane', 'Doe', 21);  
+-- add a kid
+insert into Users (AK, Name, Surname, Age) values (123458, 'Adam', 'Smith', 10);
+-- add new user
+insert into Users (AK, Name, Surname, Age) values (123459, 'kamil', 'Doe', 22);
+-- we have a user with id 5, its already inserted
+-- once we want to delete a user, we cannot do that because it is violating foreign key constraint
+-- in the table tickets, so we have to delete all tickets first
+delete from Tickets where User_ID = 5;
+-- but we cannot delete a ticket, because it is violating foreign key constraint in the table payments
+-- so we have to delete all payments first
+delete from Payments where Ticket_ID = 1;
+-- but why on delete it is not deleting the payments automatically?
+-- do we need to change the cascade option?
+-- in the table tickets, we have a foreign key constraint with on delete cascade
+
+insert into Classes (Class_Name) values ('Economy');
+insert into Classes (Class_Name) values ('Business');
+
+insert into Functions (Name, Class_ID) values ('Exotic food', 1);
+insert into Functions (Name, Class_ID) values ('Basic food', 2);
+insert into Functions (Name, Class_ID) values ('Premium seats', 1);
+insert into Functions (Name, Class_ID) values ('Basic seats', 2);
+
+-- insert user 1 into flight 1 (should fail because already departed)
+insert into Tickets (User_ID, Flight_ID, Seat_Number) values (1, 1, 1);
+--insert user 1 into flight 3
+insert into Tickets (User_ID, Flight_ID, Seat_Number) values (1, 3, 1);
+-- update payment
+insert into Payments (Ticket_ID, Cost) values (2, 100);
+-- try to buy the another seat (error, he already bought a ticket for this flight)
+insert into Tickets (User_ID, Flight_ID, Seat_Number) values (1, 3, 2);
+-- try another user buy the same seat (error, seat is already occupied)
+insert into Tickets (User_ID, Flight_ID, Seat_Number) values (2, 3, 1);
+-- update materialised view: REFRESH MATERIALIZED VIEW Users_Information;
+-- now insert user 1 and 2 into flight 2
+insert into Tickets (User_ID, Flight_ID, Seat_Number) values (1, 2, 1);
+-- update payment
+insert into Payments (Ticket_ID, Cost) values (5, 100);
+insert into Tickets (User_ID, Flight_ID, Seat_Number) values (2, 2, 2);
+-- try to insert a kid into flight 2 (should fail because there are no seats left)
+insert into Tickets (User_ID, Flight_ID, Seat_Number) values (3, 2, 3);
+-- then insert him into enother flight
+insert into Tickets (User_ID, Flight_ID, Seat_Number, Class_ID) values (3, 3, 3, 2);
+-- update payment
+insert into Payments (Ticket_ID, Cost) values (8, 100);
+
+
+-- in postgress how to create a database?
+-- type: create database database_name
+-- in our case, database will be called: Airlines
+-- to get the list of databases, type: \l
+-- to select the database, type: \c database_name
+-- to print all the tables, type: \dt
+-- to delete db, type: drop database database_name
+-- to exit from psql, type: \q
+-- to exit from database, type: \c
+-- to delete function, type: drop function function_name
+-- to delete trigger, type: drop trigger trigger_name on table_name
+-- print all the triggers: \dT
+-- print all the functions: \df
+-- print all the views: \dv
+
+
+/*
+drop all tables and views:
+-- start from child tables
+drop table Payments;
+drop table Functions cascade;
+drop table Classes cascade;
+drop table Tickets cascade;
+drop table Users cascade;
+drop table Flights cascade;
+drop table Aviacompanies cascade;
+drop view Users_Information;
+
+-- then drop all the functions and triggers
+drop function Decrease_Seats();
+drop function Update_Seats();
+drop function Discount();
+drop function Occupied_Seat();
+drop function Time_Passed();
+drop trigger Decrease_Seats;
+drop trigger Update_Seats;
+drop trigger Discount;
+drop trigger Occupied_Seat on Tickets;
+drop trigger Time_Passed
+
+select event_object_table as table_name, trigger_name
+from information_schema.triggers
+group by table_name, trigger_name;
+*/
